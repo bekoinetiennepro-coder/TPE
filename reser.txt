@@ -3,22 +3,22 @@ import os
 import shutil
 import time
 from datetime import datetime
-from config import get_connection
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
-import re
-import csv
-# ----------------- CONFIGURATION -----------------
+
+# ================= CONFIGURATION =================
 DOSSIER_ENTREE = r"C:\MonProjetCompta\input"
 DOSSIER_ARCHIVE = r"C:\MonProjetCompta\archive"
 DOSSIER_EXPORT = r"C:\MonProjetCompta\export"
 INTERVALLE_CHECK = 10  # secondes pour la surveillance continue
 
+# ----------------- CONFIGURATION -----------------
 
 # ----------------- NOM DU FICHIER D'EXPORT -----------------
 def nom_fichier_export():
     date_str = datetime.now().strftime("%Y-%m-%d")
-    return os.path.join(DOSSIER_EXPORT, f"resultat_{date_str}.txt")
+    return os.path.join(DOSSIER_EXPORT, f"Contre_Partie.txt")
+
 
 # ----------------- DATAFRAME GLOBAL -----------------
 df_final = pd.DataFrame()
@@ -141,19 +141,12 @@ def traiter_fichier(fichier):
 
             # Trouver la colonne du montant (ex: "crédit" ou "credit")
             col_montant = next((c for c in df.columns if "montant_brut" in c ), None)
-            # Trouver la colonne de commission (ex: "compte:" ou "compte1")
-           # col_commission = next((c for c in df.columns if "commission" in c), None)
-             # Trouver la colonne de commission (ex: "compte:" ou "compte1")
-           # col_comptabiliser = next((c for c in df.columns if "montant_net" in c  ), None)
+            
             col_date = next((c for c in df.columns if "horodatage" in c ),None)
             
             if col_montant:
                 df.rename(columns={col_montant: "montant"}, inplace=True)
-            # if col_commission:
-            #     df.rename(columns={col_commission: "commissoin"}, inplace=True)
-
-            # if col_comptabiliser:
-            #     df.rename(columns={col_comptabiliser: "net_a_compt"}, inplace=True)
+            
             if col_date:
                 df.rename(columns={col_date: "date_operation"},inplace=True)
                 
@@ -162,54 +155,24 @@ def traiter_fichier(fichier):
                 print(f"[ERREUR] Colonnes non trouvées pour WAVE : montant={col_montant}, commission={col_commission}")
                 print("[DEBUG] Colonnes détectées :", df.columns.tolist())
                 return
-            # 🧮 Normalisation des valeurs pour ORANGE
-            # if "commissoin" in df.columns:
-            #     # convertir en numérique proprement
-            #     df["commissoin"] = pd.to_numeric(df["commissoin"], errors="coerce").fillna(0)
-            #     # remettre en positif (si valeurs négatives)
-            #     df["commissoin"] = df["commissoin"].abs()
-
+            
         # ---------------- SPECIAL : TRAITEMENT CARTE BANCAIRE ----------------
+        
         if operateur_fichier == "CARTE BANCAIRE":
 
-            # Renommer proprement les colonnes
+            # Toujours utiliser Code Site
+            df["site"] = df["code_site"]
+
+            # Nettoyage
+            df.drop(columns=[c for c in ["code_site"] if c in df.columns], inplace=True)
+
             df.rename(columns={
                 "date": "date_operation",
-                "code_site": "site",
                 "carte_bancaire": "montant"
             }, inplace=True)
 
-            # Convertir montant en numérique
-            df["montant"] = pd.to_numeric(df["montant"], errors="coerce").fillna(0)
-
-            # Il n'y a pas de commission
             df["commission"] = 0
-
-            # Montant à comptabiliser = montant
             df["montant_a_comptabiliser"] = df["montant"]
-
-            # Ajouter l'opérateur
-           # df["opérateur"] = "CARTE BANCAIRE"
-
-            # # Nettoyage date (format jj/mm/aaaa)
-            # df["date_operation"] = pd.to_datetime(df["date_operation"], errors="coerce").dt.date
-            # df["date_operation"] = df["date_operation"].apply(
-            #     lambda x: x.strftime("%d/%m/%Y") if pd.notnull(x) else ""
-            # )
-
-            # # Regrouper par site (si nécessaire)
-            # df_group = df.groupby(["opérateur", "site"], as_index=False).sum()
-
-            # # Récupérer la date
-            # df_group["date_operation"] = df.groupby(["opérateur", "site"])["date_operation"].first().values
-
-            # # Créer periode = jj-mmm-aa
-            # df_group["date_operation_dt"] = pd.to_datetime(df_group["date_operation"], format="%d/%m/%Y", errors="coerce")
-            # df_group["periode"] = df_group["date_operation_dt"].dt.strftime("%d-%b-%y").str.lower()
-            # df_group.drop(columns=["date_operation_dt"], inplace=True)
-
-            # return df_group
-
 
         else:
             colonnes_requises = ["opérateur", "site", "montant", "commission", "montant_a_comptabiliser"]
@@ -253,81 +216,63 @@ def traiter_fichier(fichier):
             # Supprimer colonne temporaire
             df_group.drop(columns=["date_operation_dt"], inplace=True)
 
-        # ----------------- Génération des écritures comptables -----------------
+            # ----------------- Génération des écritures comptables par site -----------------
         lignes = []
-        for _, row in df_group.iterrows():
-            site = row["site"]
-            montant = row["montant"]
-            commission =  row["commission"]
-            compta = row["montant_a_comptabiliser"]
-            operation = row["date_operation"]
-            operateur = row["opérateur"].upper()
-            Code="C52"
-            libelle55= str(site) + " Clollecte Globale TPE " + operateur +  " du " + str(operation)
-            libelle52= str(site) + " Collecte Vente TPE du " +  str(operation)
-            libelle63= str(site) + " Commission sur Collecte TPE du " + str(operation)
-            comptmoov = 558013
-            comptebrumoov_om = 521650
-            comptemtn = 558012
-            comptebrumtn = 531100
-            compteom = 558011
-            comptewa = 558015
-            comptebruwav = 521450
-            comptecartebancaire=558014
-            comptefr = 6327
-            auxi = "TPE" + str(site)
-            periode = row["periode"]
-            #Ligne Moov
-            if operateur == "MOOV":
-                
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptefr , "Sens Ecriture": "D","Type Ecriture":"", "Montant": commission,"Auxil/Analyst": "","Periode":periode,"Libelle":libelle63})
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptefr , "Sens Ecriture": "D", "Type Ecriture":"A","Montant": commission,"Auxil/Analyst": site,"Periode":periode,"Libelle":libelle63})
-                
-                
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptmoov, "Sens Ecriture": "C", "Type Ecriture":"X", "Montant": montant,"Auxil/Analyst": auxi ,"Periode":periode,"Libelle":libelle55 })               
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptebrumoov_om, "Sens Ecriture": "D",  "Montant": compta,"Periode":periode,"Libelle":libelle52})             
-                
-            #ligne Mtn    
-            elif operateur == "MTN":
-                
-              lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptefr , "Sens Ecriture": "D","Type Ecriture":"", "Montant": commission,"Auxil/Analyst": "","Periode":periode,"Libelle":libelle63})
-              lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptefr , "Sens Ecriture": "D", "Type Ecriture":"A","Montant": commission,"Auxil/Analyst": site,"Periode":periode,"Libelle":libelle63})
-                
-                
-              lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptemtn, "Sens Ecriture": "C", "Type Ecriture":"X", "Montant": montant,"Auxil/Analyst": auxi ,"Periode":periode,"Libelle":libelle55 })
-              lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptebrumtn, "Sens Ecriture": "D",  "Montant": montant,"Periode":periode,"Libelle":libelle52})
-                
-            #ligne orange   
-            elif operateur == "ORANGE":
-                
-            
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptefr , "Sens Ecriture": "D","Type Ecriture":"", "Montant": commission,"Auxil/Analyst": "","Periode":periode,"Libelle":libelle63})
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptefr , "Sens Ecriture": "D", "Type Ecriture":"A","Montant": commission,"Auxil/Analyst": site,"Periode":periode,"Libelle":libelle63})
-                
-                
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": compteom, "Sens Ecriture": "C", "Type Ecriture":"X", "Montant": montant,"Auxil/Analyst": auxi ,"Periode":periode,"Libelle":libelle55 })           
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptebrumoov_om, "Sens Ecriture": "D",  "Montant": compta,"Periode":periode,"Libelle":libelle52})
-               
-            #ligne wave  
-            elif operateur == "WAVE":
-                
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptefr , "Sens Ecriture": "D","Type Ecriture":"", "Montant": commission,"Auxil/Analyst": "","Periode":periode,"Libelle":libelle63})
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptefr , "Sens Ecriture": "D", "Type Ecriture":"A","Montant": commission,"Auxil/Analyst": site,"Periode":periode,"Libelle":libelle63})
-                
-                
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptewa, "Sens Ecriture": "C", "Type Ecriture":"X", "Montant": montant,"Auxil/Analyst": auxi ,"Periode":periode,"Libelle":libelle55 })       
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptebruwav, "Sens Ecriture": "D",  "Montant": compta,"Periode":periode,"Libelle":libelle52})
-              
-            elif operateur == "CARTE BANCAIRE":
-                
-                # lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptefr , "Sens Ecriture": "D","Type Ecriture":"", "Montant": commission,"Auxil/Analyst": "","Periode":periode,"Libelle":libelle63})
-                # lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptefr , "Sens Ecriture": "D", "Type Ecriture":"A","Montant": commission,"Auxil/Analyst": site,"Periode":periode,"Libelle":libelle63})
-                               
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptecartebancaire, "Sens Ecriture": "C", "Type Ecriture":"X", "Montant": montant,"Auxil/Analyst": auxi ,"Periode":periode,"Libelle":libelle55 })       
-                lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptebrumoov_om, "Sens Ecriture": "D",  "Montant": compta,"Periode":periode,"Libelle":libelle52})
-                  
-            else:
-                print(f"[AVERTISSEMENT] Opérateur non reconnu pour {fichier}: {operateur}")
+
+        for site, df_site in df_group.groupby("site"):
+            total_credit = 0
+            operation = df_site["date_operation"].iloc[0] if "date_operation" in df_site.columns else ""
+            periode = df_site["periode"].iloc[0] if "periode" in df_site.columns else ""
+            auxi = f"TPE{site}"
+            Code = "C52"
+
+            # Comptes pour chaque opérateur
+            comptes_operateur = {
+                "MOOV": 558013,
+                "MTN": 558012,
+                "ORANGE": 558011,
+                "WAVE": 558015,
+                "CARTE BANCAIRE": 558014
+            }
+
+            # 1️⃣ Créer les lignes débit par opérateur
+            for _, row in df_site.iterrows():
+                operateur = row["opérateur"].upper()
+                montant = row["montant"]
+                compta = row["montant_a_comptabiliser"]
+
+                compte_debit = comptes_operateur.get(operateur, 0)
+                libelle52 = f"{site} Collecte Vente TPE du {operation}"
+                if montant == 0 or pd.isna(montant):
+                 continue    
+                lignes.append({
+                    "Journal": Code,
+                    "Date": operation,
+                    "Mouvement": "OD",
+                    "Compte": compte_debit,
+                    "Sens Ecriture": "D",
+                    "Type Ecriture": "",
+                    "Montant": compta,
+                    "Auxil/Analyst": "",
+                    "Periode": periode,
+                    "Libelle": libelle52
+                })
+
+                total_credit += montant  # On additionne pour le crédit global
+
+            # 2️⃣ Ajouter UNE SEULE ligne crédit par site
+            lignes.append({
+                "Journal": Code,
+                "Date": operation,
+                "Mouvement": "OD",
+                "Compte": 55801,  # compte crédit global
+                "Sens Ecriture": "C",
+                "Type Ecriture": "X",
+                "Montant": total_credit,
+                "Auxil/Analyst": auxi,
+                "Periode": periode,
+                "Libelle": f"{site} Crédit Collecte TPE du {operation}"
+            })
 
         # ----------------- Ajout au dataframe global -----------------
         if lignes:
@@ -340,44 +285,36 @@ def traiter_fichier(fichier):
     except Exception as e:
         print(f"[ERREUR] Traitement du fichier {fichier} : {e}")
 
-# ----------------- INSERTION DANS LA BASE -----------------
-def inserer_donnees_bdd(df):
-    try:
-        if df.empty:
-            print("[INFO] Aucune donnée à insérer dans la BDD.")
-            return
-        conn = get_connection()
-        cursor = conn.cursor()
-        sql = """
-            INSERT INTO ecritures_comptables (site, operateur, type_ecriture, compte, montant)
-            VALUES (%s, %s, %s, %s, %s)
-        """
-        valeurs = [(row["Site"], row["Operateur"], row["Type"], row["Compte"], float(row["Montant"]))
-                   for _, row in df.iterrows()]
-        cursor.executemany(sql, valeurs)
-        conn.commit()
-        cursor.close()
-        conn.close()
-        print(f"[BDD] {len(valeurs)} écritures enregistrées ✅")
-    except Exception as e:
-        print(f"[ERREUR BDD] {e}")
+
 
 # ----------------- EXPORT DU JOUR -----------------
 def exporter_resultat():
     if df_final.empty:
         print("[INFO] Aucune donnée à exporter aujourd'hui.")
         return
-    fichier_export = nom_fichier_export()
-   # df_final.to_excel(fichier_export, index=False)
-   
+
+    # 🔹 Récupérer la première date d'opération
+    if "Date" in df_final.columns:
+        date_operation = (
+            pd.to_datetime(df_final["Date"], errors="coerce")
+            .dropna()
+            .iloc[0]
+            .strftime("%d-%m-%Y")
+        )
+    else:
+        date_operation = datetime.now().strftime("%d-%m-%Y")
+
+    fichier_export = f"{nom_fichier_export()}_{date_operation}.txt"
+
     df_final.to_csv(
-    fichier_export,
-    sep=";",
-    index=False,
-    header=False,
-    encoding="utf-8-sig",
-    mode="a"
+        fichier_export,
+        sep=";",
+        index=False,
+        header=False,
+        encoding="utf-8-sig",
+        mode="a"
     )
+
     print(f"[EXPORT] Résultat exporté : {fichier_export}")
 
     
@@ -388,7 +325,6 @@ def automatiser_import():
     for fichier in fichiers:
         traiter_fichier(fichier)
 
-    inserer_donnees_bdd(df_final)
     exporter_resultat()
 
 # ----------------- SURVEILLANCE EN CONTINU -----------------
@@ -396,7 +332,6 @@ class SurveillanceHandler(FileSystemEventHandler):
     def on_created(self, event):
         if not event.is_directory and event.src_path.lower().endswith((".xlsx", ".xls",".xlsb")):
             traiter_fichier(event.src_path)
-            inserer_donnees_bdd(df_final)
             exporter_resultat()
 
 def surveillance_continue():

@@ -9,7 +9,6 @@ from watchdog.events import FileSystemEventHandler
 # ================= CONFIGURATION =================
 # ----------------- CONFIGURATION -----------------
 
-BASE_RESEAU = r"\\192.109.69.46\Compta_Reglement"
 # ----------------- CONFIGURATION -----------------
 DOSSIER_ENTREE = os.path.join(BASE_RESEAU, "brutTpe")
 DOSSIER_ARCHIVE = os.path.join(BASE_RESEAU, "ArchiveTpe")
@@ -191,7 +190,27 @@ def traiter_fichier(fichier):
         # Sauvegarder la colonne date_operation (si présente)
         if "date_operation" in df.columns:
             # Conversion en datetime puis garder la date seulement
-            df["date_operation"] = pd.to_datetime(df["date_operation"], errors="coerce").dt.date
+            #df["date_operation"] = pd.to_datetime(df["date_operation"], errors="coerce").dt.date
+            # df["date_operation"] = pd.to_datetime(
+            #     df["date_operation"],
+            #     dayfirst=True,          # 🔥 CORRECTION ICI
+            #     errors="coerce"
+            # ).dt.date
+            if operateur_fichier == "WAVE":
+    # WAVE : format ISO 8601 avec timezone
+                df["date_operation"] = pd.to_datetime(
+                    df["date_operation"],
+                    errors="coerce",
+                    utc=True
+                ).dt.date
+            else:
+                # MOOV / MTN / ORANGE / CARTE BANCAIRE
+                df["date_operation"] = pd.to_datetime(
+                    df["date_operation"],
+                    dayfirst=True,
+                    errors="coerce"
+                ).dt.date
+
             # Format jj/mm/aaaa
             df["date_operation"] = df["date_operation"].apply(lambda x: x.strftime("%d/%m/%Y") if pd.notnull(x) else "")
             # Sauvegarder la date par site avant groupby
@@ -214,7 +233,12 @@ def traiter_fichier(fichier):
         # 6️⃣ Créer la colonne periode à partir de date_operation
         if "date_operation" in df_group.columns:
             # Convertir en datetime
-            df_group["date_operation_dt"] = pd.to_datetime(df_group["date_operation"], format="%d/%m/%Y", errors="coerce")
+           # df_group["date_operation_dt"] = pd.to_datetime(df_group["date_operation"], format="%d/%m/%Y", errors="coerce")
+            df_group["date_operation_dt"] = pd.to_datetime(
+                df_group["date_operation"],
+                dayfirst=True,
+                errors="coerce"
+            )
             # Créer periode au format jj-mmm-aa (ex: 12-nov-25)
             df_group["periode"] = df_group["date_operation_dt"].dt.strftime("%d-%b-%y").str.lower()
             # Supprimer colonne temporaire
@@ -287,8 +311,7 @@ def traiter_fichier(fichier):
                 lignes.append({"Journal":Code, "Date": operation,"Mouvement":"OD", "Compte": comptewa, "Sens Ecriture": "C", "Type Ecriture":"", "Montant": montant,"Auxil/Analyst": "" ,"Periode":periode,"Libelle":libelle55 })       
 
             elif operateur == "CARTE BANCAIRE":
-                
-              
+                             
                  # 🔥 Ne rien générer si le montant est 0
                 if montant == 0 or pd.isna(montant):
                  continue     
@@ -312,15 +335,47 @@ def traiter_fichier(fichier):
 
 
 # ----------------- EXPORT DU JOUR -----------------
+# def exporter_resultat():
+#     if df_final.empty:
+#         print("[INFO] Aucune donnée à exporter aujourd'hui.")
+#         return
+
+#     # 🔹 Récupérer la première date d'opération
+#     if "Date" in df_final.columns:
+#         date_operation = (
+#             pd.to_datetime(df_final["Date"], errors="coerce")
+#             .dropna()
+#             .iloc[0]
+#             .strftime("%d-%m-%Y")
+#         )
+#     else:
+#         date_operation = datetime.now().strftime("%d-%m-%Y")
+
+#     fichier_export = f"{nom_fichier_export()}_{date_operation}.txt"
+
+#     df_final.to_csv(
+#         fichier_export,
+#         sep=";",
+#         index=False,
+#         header=False,
+#         encoding="utf-8-sig",
+#         mode="a"
+#     )
+
+#     print(f"[EXPORT] Résultat exporté : {fichier_export}")
+
 def exporter_resultat():
     if df_final.empty:
         print("[INFO] Aucune donnée à exporter aujourd'hui.")
         return
 
-    # 🔹 Récupérer la première date d'opération
     if "Date" in df_final.columns:
         date_operation = (
-            pd.to_datetime(df_final["Date"], errors="coerce")
+            pd.to_datetime(
+                df_final["Date"],
+                dayfirst=True,      # 🔥 CORRECTION CRITIQUE
+                errors="coerce"
+            )
             .dropna()
             .iloc[0]
             .strftime("%d-%m-%Y")
@@ -340,7 +395,6 @@ def exporter_resultat():
     )
 
     print(f"[EXPORT] Résultat exporté : {fichier_export}")
-
     
 # ----------------- TRAITEMENT DE TOUS LES FICHIERS -----------------
 def automatiser_import():
@@ -352,26 +406,26 @@ def automatiser_import():
     exporter_resultat()
 
 # ----------------- SURVEILLANCE EN CONTINU -----------------
-class SurveillanceHandler(FileSystemEventHandler):
-    def on_created(self, event):
-        if not event.is_directory and event.src_path.lower().endswith((".xlsx", ".xls",".xlsb")):
-            traiter_fichier(event.src_path)
-            exporter_resultat()
+# class SurveillanceHandler(FileSystemEventHandler):
+#     def on_created(self, event):
+#         if not event.is_directory and event.src_path.lower().endswith((".xlsx", ".xls",".xlsb")):
+#             traiter_fichier(event.src_path)
+#             exporter_resultat()
 
-def surveillance_continue():
-    event_handler = SurveillanceHandler()
-    observer = Observer()
-    observer.schedule(event_handler, path=DOSSIER_ENTREE, recursive=False)
-    observer.start()
-    print("[INFO] Surveillance continue activée...")
-    try:
-        while True:
-            time.sleep(INTERVALLE_CHECK)
-    except KeyboardInterrupt:
-        observer.stop()
-    observer.join()
+# def surveillance_continue():
+#     event_handler = SurveillanceHandler()
+#     observer = Observer()
+#     observer.schedule(event_handler, path=DOSSIER_ENTREE, recursive=False)
+#     observer.start()
+#     print("[INFO] Surveillance continue activée...")
+#     try:
+#         while True:
+#             time.sleep(INTERVALLE_CHECK)
+#     except KeyboardInterrupt:
+#         observer.stop()
+#     observer.join()
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":
     automatiser_import()
-    surveillance_continue()
+    #surveillance_continue()
