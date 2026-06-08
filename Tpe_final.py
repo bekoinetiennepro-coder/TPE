@@ -9,18 +9,22 @@ from watchdog.events import FileSystemEventHandler
 # ================= CONFIGURATION =================
 # ----------------- CONFIGURATION -----------------
 
+BASE_RESEAU = r"\\192.109.69.46\GenerationTPE"
 # ----------------- CONFIGURATION -----------------
 DOSSIER_ENTREE = os.path.join(BASE_RESEAU, "brutTpe")
-DOSSIER_ARCHIVE = os.path.join(BASE_RESEAU, "ArchiveTpe")
-DOSSIER_EXPORT = os.path.join(BASE_RESEAU,"data_tpe")
+DOSSIER_ARCHIVE = os.path.join(BASE_RESEAU, "Archives")
+DOSSIER_EXPORT = os.path.join(BASE_RESEAU,"data_tpe/MAI")
 
+#DOSSIER_ENTREE = r"C:\Users\e.bekoin\Downloads\debo\EXTRACTIONS\TPE\brute"
+#DOSSIER_ARCHIVE = r"C:\Users\e.bekoin\Downloads\debo\EXTRACTIONS\TPE\archives"
+#DOSSIER_EXPORT = r"C:\Users\e.bekoin\Downloads\debo\EXTRACTIONS\TPE\data"
 
 INTERVALLE_CHECK = 10  # secondes pour la surveillance continue
 
 # ----------------- NOM DU FICHIER D'EXPORT -----------------
 def nom_fichier_export():
     date_str = datetime.now().strftime("%Y-%m-%d")
-    return os.path.join(DOSSIER_EXPORT, f"Contre_Partie.txt")
+    return os.path.join(DOSSIER_EXPORT, f"Ancien_Contre_Partie.txt")
 
 
 # ----------------- DATAFRAME GLOBAL -----------------
@@ -87,6 +91,9 @@ def traiter_fichier(fichier):
                 .str.replace("î", "i")
                 .str.replace("'", "")
         )
+        print("\n[DEBUG] Colonnes ORANGE détectées :")
+        for c in df.columns:
+            print(f" - {c}")
 
         # Ajout automatique de la colonne opérateur si absente
         if "opérateur" not in df.columns:
@@ -189,19 +196,13 @@ def traiter_fichier(fichier):
 
         # Sauvegarder la colonne date_operation (si présente)
         if "date_operation" in df.columns:
-            # Conversion en datetime puis garder la date seulement
-            #df["date_operation"] = pd.to_datetime(df["date_operation"], errors="coerce").dt.date
-            # df["date_operation"] = pd.to_datetime(
-            #     df["date_operation"],
-            #     dayfirst=True,          # 🔥 CORRECTION ICI
-            #     errors="coerce"
-            # ).dt.date
+           
             if operateur_fichier == "WAVE":
-    # WAVE : format ISO 8601 avec timezone
                 df["date_operation"] = pd.to_datetime(
                     df["date_operation"],
                     errors="coerce",
-                    utc=True
+                    #utc=True  # WAVE fournit des timestamps en UTC, on peut les convertir en heure locale si besoin exemeple :2026-11-12T14:23:45Z → 11/12/2026
+                    dayfirst=True
                 ).dt.date
             else:
                 # MOOV / MTN / ORANGE / CARTE BANCAIRE
@@ -217,7 +218,24 @@ def traiter_fichier(fichier):
             df_date = df.groupby(["opérateur", "site"])["date_operation"].first().reset_index()
         else:
             df_date = None
+        #AJOUTE 06/06/2026 POUR DEBUGAGE ORANGE    
+        print("[DEBUG] Colonnes avant groupby :", df.columns.tolist())
+        print(df[["montant", "commission", "montant_a_comptabiliser"]].dtypes)
+        # Normalisation des colonnes numériques pour ORANGE (ex: "1 234,56" → 1234.56)
+        for col in ["montant", "commission", "montant_a_comptabiliser"]:
+                if col in df.columns:
 
+                    df[col] = (
+                        df[col]
+                        .astype(str)
+                        .str.replace("\xa0", "", regex=False)  # espace insécable
+                        .str.replace(" ", "", regex=False)
+                        .str.replace(",", ".", regex=False)
+                        .str.strip()
+                    )
+
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+        #FINALEMENT, ON A RÉUSSI À NORMALISER LES COLONNES NUMÉRIQUES POUR ORANGE, CE QUI PERMET DE PASSER AU GROUPBY SANS ERREUR
         # Groupby pour sommer les colonnes numériques
         df_group = df.groupby(["opérateur", "site"], as_index=False).sum(numeric_only=True)
        
@@ -239,11 +257,32 @@ def traiter_fichier(fichier):
                 dayfirst=True,
                 errors="coerce"
             )
-            # Créer periode au format jj-mmm-aa (ex: 12-nov-25)
-            df_group["periode"] = df_group["date_operation_dt"].dt.strftime("%d-%b-%y").str.lower()
-            # Supprimer colonne temporaire
-            df_group.drop(columns=["date_operation_dt"], inplace=True)
+            # # Créer periode au format jj-mmm-aa (ex: 12-nov-25)
+            # df_group["periode"] = df_group["date_operation_dt"].dt.strftime("%d-%b-%y").str.lower()
+            # # Supprimer colonne temporaire
+            # df_group.drop(columns=["date_operation_dt"], inplace=True)
+            df_group["periode"] = (
+            df_group["date_operation_dt"]
+            .dt.strftime("%d-%b-%y")
+            .str.lower()
+            .replace({
+                "jan": "jan",
+                "feb": "fév",
+                "mar": "mars",
+                "apr": "avr",
+                "may": "mai",
+                "jun": "juin",
+                "jul": "juil",
+                "aug": "août",
+                "sep": "sept",
+                "oct": "oct",
+                "nov": "nov",
+                "dec": "déc"
+            }, regex=True)
+        )
 
+        # Supprimer colonne temporaire
+        df_group.drop(columns=["date_operation_dt"], inplace=True)
         # ----------------- Génération des écritures comptables -----------------
         lignes = []
         for _, row in df_group.iterrows():
@@ -256,7 +295,7 @@ def traiter_fichier(fichier):
             Code="C52"
             libelle55= str(site) + " Clollecte Globale TPE " + operateur +  " du " + str(operation)
             libelle52= str(site) + " Collecte Vente TPE du " +  str(operation)
-            libelle63= str(site) + " Commission sur Collecte TPE du " + str(operation)
+            libelle63 = f"{site} Commission {operateur} sur Collecte TPE du {operation}"
             comptmoov = 558013
             comptebrumoov_om = 521650
             comptemtn = 558012
@@ -405,25 +444,7 @@ def automatiser_import():
 
     exporter_resultat()
 
-# ----------------- SURVEILLANCE EN CONTINU -----------------
-# class SurveillanceHandler(FileSystemEventHandler):
-#     def on_created(self, event):
-#         if not event.is_directory and event.src_path.lower().endswith((".xlsx", ".xls",".xlsb")):
-#             traiter_fichier(event.src_path)
-#             exporter_resultat()
 
-# def surveillance_continue():
-#     event_handler = SurveillanceHandler()
-#     observer = Observer()
-#     observer.schedule(event_handler, path=DOSSIER_ENTREE, recursive=False)
-#     observer.start()
-#     print("[INFO] Surveillance continue activée...")
-#     try:
-#         while True:
-#             time.sleep(INTERVALLE_CHECK)
-#     except KeyboardInterrupt:
-#         observer.stop()
-#     observer.join()
 
 # ----------------- MAIN -----------------
 if __name__ == "__main__":

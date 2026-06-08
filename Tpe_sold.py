@@ -6,10 +6,13 @@ from datetime import datetime
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 
+BASE_RESEAU = r"\\192.109.69.46\GenerationTPE"
 # ----------------- CONFIGURATION -----------------
-DOSSIER_ENTREE = os.path.join(BASE_RESEAU, "input_Constation_des_versements_TPE")
+#DOSSIER_ENTREE = os.path.join(BASE_RESEAU, "input_Constation_des_versements_TPE")
+DOSSIER_ENTREE = os.path.join(BASE_RESEAU, "Archives")
+
 DOSSIER_ARCHIVE = os.path.join(BASE_RESEAU, "archive_Constation_des_versements_TPE")
-DOSSIER_EXPORT = os.path.join(BASE_RESEAU,"Constation_des_versements_TPE")
+DOSSIER_EXPORT = os.path.join(BASE_RESEAU,"Constation_des_versements_TPE/MAI")
 
 #INTERVALLE_CHECK = 10  # secondes pour la surveillance continue
 
@@ -128,7 +131,7 @@ def traiter_fichier(fichier):
                 print(f"[ERREUR] Colonnes non trouvées pour ORANGE : montant={col_montant}, commission={col_commission}")
                 print("[DEBUG] Colonnes détectées :", df.columns.tolist())
                 return
-            # 🧮 Normalisation des valeurs pour ORANGE
+            #  Normalisation des valeurs pour ORANGE
             if "commission" in df.columns:
                 # convertir en numérique proprement
                 df["commission"] = pd.to_numeric(df["commission"], errors="coerce").fillna(0)
@@ -137,7 +140,7 @@ def traiter_fichier(fichier):
 
 
         elif operateur_fichier == "WAVE":
-            # 🔍 Recherche intelligente des colonnes spécifiques à Orange
+            #  Recherche intelligente des colonnes spécifiques à Orange
             colonnes_requises = ["opérateur", "site", "montant", "commission", "montant_a_comptabiliser","date_operation"]
 
             # Trouver la colonne du montant (ex: "crédit" ou "credit")
@@ -187,19 +190,14 @@ def traiter_fichier(fichier):
 
         # Sauvegarder la colonne date_operation (si présente)
         if "date_operation" in df.columns:
-            # Conversion en datetime puis garder la date seulement
-            #df["date_operation"] = pd.to_datetime(df["date_operation"], errors="coerce").dt.date
-            # df["date_operation"] = pd.to_datetime(
-            #     df["date_operation"],
-            #     dayfirst=True,          # 🔥 CORRECTION ICI
-            #     errors="coerce"
-            # ).dt.date
+            
             if operateur_fichier == "WAVE":
-    # WAVE : format ISO 8601 avec timezone
+        # WAVE : format ISO 8601 avec timezone
                 df["date_operation"] = pd.to_datetime(
                     df["date_operation"],
                     errors="coerce",
-                    utc=True
+                    #utc=True  
+                    dayfirst=True # WAVE fournit des timestamps en UTC, on peut les convertir en heure locale si besoin exemeple :2026-11-12T14:23:45Z → 11/12/2026
                 ).dt.date
             else:
                 # MOOV / MTN / ORANGE / CARTE BANCAIRE
@@ -215,6 +213,19 @@ def traiter_fichier(fichier):
             df_date = df.groupby(["opérateur", "site"])["date_operation"].first().reset_index()
         else:
             df_date = None
+        for col in ["montant", "commission", "montant_a_comptabiliser"]:
+                if col in df.columns:
+
+                    df[col] = (
+                        df[col]
+                        .astype(str)
+                        .str.replace("\xa0", "", regex=False)  # espace insécable
+                        .str.replace(" ", "", regex=False)
+                        .str.replace(",", ".", regex=False)
+                        .str.strip()
+                    )
+
+                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)    
 
         # Groupby pour sommer les colonnes numériques
         df_group = df.groupby(["opérateur", "site"], as_index=False).sum(numeric_only=True)
@@ -238,7 +249,29 @@ def traiter_fichier(fichier):
                 errors="coerce"
             )
             # Créer periode au format jj-mmm-aa (ex: 12-nov-25)
-            df_group["periode"] = df_group["date_operation_dt"].dt.strftime("%d-%b-%y").str.lower()
+            # df_group["periode"] = df_group["date_operation_dt"].dt.strftime("%d-%b-%y").str.lower()
+            # # Supprimer colonne temporaire
+            # df_group.drop(columns=["date_operation_dt"], inplace=True)
+            df_group["periode"] = (
+            df_group["date_operation_dt"]
+            .dt.strftime("%d-%b-%y")
+            .str.lower()
+            .replace({
+                "jan": "jan",
+                "feb": "fév",
+                "mar": "mars",
+                "apr": "avr",
+                "may": "mai",
+                "jun": "juin",
+                "jul": "juil",
+                "aug": "août",
+                "sep": "sept",
+                "oct": "oct",
+                "nov": "nov",
+                "dec": "déc"
+            }, regex=True)
+            )
+
             # Supprimer colonne temporaire
             df_group.drop(columns=["date_operation_dt"], inplace=True)
 
@@ -332,7 +365,7 @@ def exporter_resultat():
         date_operation = (
             pd.to_datetime(
                 df_final["Date"],
-                dayfirst=True,      # 🔥 CORRECTION CRITIQUE
+                dayfirst=True,      
                 errors="coerce"
             )
             .dropna()
